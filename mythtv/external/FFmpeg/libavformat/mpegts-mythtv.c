@@ -2947,8 +2947,6 @@ static void pat_cb(MpegTSFilter *filter, const uint8_t *section, int section_len
     AVProgram *program;
 
     // MythTV added
-    char buf[256];
-
     int pmt_pnums[PAT_MAX_PMT];
     int pmt_pids[PAT_MAX_PMT];
     unsigned int pmt_count = 0;
@@ -3014,7 +3012,6 @@ static void pat_cb(MpegTSFilter *filter, const uint8_t *section, int section_len
         /* if there are new services, add them */
         for (i = 0; i < pmt_count; ++i)
         {
-            snprintf(buf, sizeof(buf), "MPEG Program %x", pmt_pnums[i]);
             add_pat_entry(ts, pmt_pnums[i], pmt_pids[i]);
         }
     }
