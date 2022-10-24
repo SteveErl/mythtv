@@ -68,8 +68,7 @@ def get_show_art_lists(tvmaze_show_id):
 def buildList(tvtitle, opts):
     # option -M title
     from lxml import etree
-    from MythTV import VideoMetadata, datetime
-    from MythTV.utility import levenshtein
+    from MythTV import VideoMetadata
     from MythTV.tvmaze import tvmaze_api as tvmaze
     from MythTV.tvmaze import locales
 
@@ -242,37 +241,56 @@ def buildNumbers(args, opts):
                 episodes = []
             time_match_list = []
             early_match_list = []
+            date_match_list = []
             minTimeDelta = timedelta(minutes=60)
             for i, ep in enumerate(episodes):
-                epInTgtZone = datetime.fromIso(ep.timestamp, tz = posixtzinfo(show_tz))
-                durationDelta = timedelta(minutes=ep.duration)
+                if ep.timestamp:
+                    epInTgtZone = datetime.fromIso(ep.timestamp, tz = posixtzinfo(show_tz))
+                    if ep.duration:
+                        durationDelta = timedelta(minutes=ep.duration)
+                    else: # If no duration is specified, default to 60 minutes
+                        durationDelta = timedelta(minutes=60)
 
-                # Consider it a match if the recording starts late, but within the duration of the show.
-                if epInTgtZone <= dtInTgtZone < epInTgtZone+durationDelta:
-                    # Recording start time is within the range of this episode
-                    if opts.debug:
-                        print('Recording in range of inetref %d, season %d, episode %d (%s ... %s)' \
-                                % (inetref, ep.season, ep.number, epInTgtZone, epInTgtZone+durationDelta))
-                    time_match_list.append(i)
-                    minTimeDelta = timedelta(minutes=0)
-                # Consider it a match if the recording is a little bit early. This helps cases
-                # where you set up a rule to record, at say 9:00, and the broadcaster uses a
-                # slightly odd start time, like 9:05.
-                elif epInTgtZone-minTimeDelta <= dtInTgtZone < epInTgtZone:
-                    # Recording started earlier than this episode, so see if it's the closest match
-                    if epInTgtZone - dtInTgtZone == minTimeDelta:
+                    # Consider it a match if the recording starts late, but within the duration of the show.
+                    if epInTgtZone <= dtInTgtZone < epInTgtZone+durationDelta:
+                        # Recording start time is within the range of this episode
                         if opts.debug:
-                            print('adding episode to closest list', epInTgtZone - dtInTgtZone, '\n')
-                        early_match_list.append(i)
-                    elif epInTgtZone - dtInTgtZone < minTimeDelta:
+                            print('Recording in range of inetref %d, season %d, episode %d (%s ... %s)' \
+                                    % (inetref, ep.season, ep.number, epInTgtZone, epInTgtZone+durationDelta))
+                        time_match_list.append(i)
+                        minTimeDelta = timedelta(minutes=0)
+                    # Consider it a match if the recording is a little bit early. This helps cases
+                    # where you set up a rule to record, at say 9:00, and the broadcaster uses a
+                    # slightly odd start time, like 9:05.
+                    elif epInTgtZone-minTimeDelta <= dtInTgtZone < epInTgtZone:
+                        # Recording started earlier than this episode, so see if it's the closest match
+                        if epInTgtZone - dtInTgtZone == minTimeDelta:
+                            if opts.debug:
+                                print('adding episode to closest list', epInTgtZone - dtInTgtZone, '\n')
+                            early_match_list.append(i)
+                        elif epInTgtZone - dtInTgtZone < minTimeDelta:
+                            if opts.debug:
+                                print('this episode is new closest', epInTgtZone - dtInTgtZone, '\n')
+                            minTimeDelta = epInTgtZone - dtInTgtZone
+                            early_match_list = [i]
+
+                # In rare cases, tvmaze only specifies the date and not
+                # the time. In such a scenario, look for a match to that date.
+                elif ep.airdate:
+                    epDateInTgtZone = datetime(ep.airdate.year, ep.airdate.month, ep.airdate.day)\
+                        .astimezone(posixtzinfo(show_tz))
+                    if epDateInTgtZone <= dtInTgtZone < epDateInTgtZone+timedelta(hours=24):
                         if opts.debug:
-                            print('this episode is new closest', epInTgtZone - dtInTgtZone, '\n')
-                        minTimeDelta = epInTgtZone - dtInTgtZone
-                        early_match_list = [i]
+                            print('adding episode to date match list\n')
+                        date_match_list.append(i)
 
             if not time_match_list:
                 # No exact matches found, so use the list of the closest episode(s)
                 time_match_list = early_match_list
+
+            if not time_match_list:
+                # No close matches found, so use the list of episodes on the day
+                time_match_list = date_match_list
 
             if time_match_list:
                 for ep_index in time_match_list:
@@ -354,10 +372,7 @@ def buildSingle(args, opts, tvmaze_episode_id=None):
     # option -D inetref season episode
 
     from lxml import etree
-    from MythTV import VideoMetadata, datetime
-    from MythTV.utility import levenshtein
     from MythTV.tvmaze import tvmaze_api as tvmaze
-    from MythTV.tvmaze import locales
 
     if opts.debug:
         dstr = "Function 'buildSingle' called with arguments: " + \
@@ -446,7 +461,10 @@ def buildSingleItem(inetref, season, episode_id):
     elif show_info.premiere_date:
         m.releasedate = check_item(m, ("releasedate", show_info.premiere_date))
         m.year = check_item(m, ("year", show_info.premiere_date.year))
-    m.runtime = check_item(m, ("runtime", int(ep_info.duration)))
+    if ep_info.duration:
+        m.runtime = check_item(m, ("runtime", int(ep_info.duration)))
+    else: # There is no duration specified for the episode, so pick 60 minutes
+        m.runtime = 60
 
     for actor in show_info.cast:
         try:
@@ -507,8 +525,7 @@ def buildSingleItem(inetref, season, episode_id):
 def buildCollection(tvinetref, opts):
     # option -C inetref
     from lxml import etree
-    from MythTV import VideoMetadata, datetime
-    from MythTV.utility import levenshtein
+    from MythTV import VideoMetadata
     from MythTV.tvmaze import tvmaze_api as tvmaze
     from MythTV.tvmaze import locales
 
