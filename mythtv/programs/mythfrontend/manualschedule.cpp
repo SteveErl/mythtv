@@ -29,6 +29,8 @@
 // mythfrontend
 #include "scheduleeditor.h"
 
+int ManualSchedule::last_manual_chan = -1;
+
 ManualSchedule::ManualSchedule(MythScreenStack *parent)
     : MythScreenType(parent, "ManualSchedule"),
       m_nowDateTime(MythDate::current()),
@@ -82,6 +84,9 @@ bool ManualSchedule::Create(void)
         }
         m_chanids.push_back(channels[i].m_chanId);
     }
+
+    if (last_manual_chan != -1)
+        m_channelList->SetItemCurrent(last_manual_chan);
 
     for (uint index = 0; index <= 60; index++)
     {
@@ -215,6 +220,8 @@ void ManualSchedule::recordClicked(void)
     ProgramInfo p(m_titleEdit->GetText().trimmed(),
                   m_chanids[m_channelList->GetCurrentPos()],
                   m_startDateTime, endts);
+
+    last_manual_chan = m_channelList->GetCurrentPos();
 
     auto *record = new RecordingRule();
     record->LoadByProgram(&p);
