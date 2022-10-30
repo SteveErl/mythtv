@@ -1374,35 +1374,49 @@ int editDistance( const QString& s, const QString& t )
 #undef D
 }
 
+float getStringMatchQuality(const QString& strOne, const QString& strTwo)
+{
+    float match_quality;    // ranges from 0.0 to 1.0
+
+    // It's problematic to make decisions solely upon the Levenshtein distance.
+    // If the strings are really long or really short, a simple rule, such as
+    // "accept any distance < 5" can provide misleading results. To establish
+    // a more useful measurement, we'll use the Levenshtein distance to figure
+    // out the ratio (0 - 1) of matching characters in the longer string to
+    // the length of the longer string, and call this 'match_quality'.
+    //    "Risk", "Call" -> distance = 4
+    //           match_quality = (4 - 4) / 4 = 0
+    //    "In Sickness and in Health", "Sickness and Health" -> distance = 6
+    //           match_quality = (25 - 6)/25 = .76
+    unsigned int delta = editDistance(strOne, strTwo);
+    if (strOne.length() >= strTwo.length())
+        match_quality = (float)(strOne.length() - delta) / (float)strOne.length();
+    else
+        match_quality = (float)(strTwo.length() - delta) / (float)strTwo.length();
+
+    return match_quality;
+}
+
 QString nearestName(const QString& actual, const QStringList& candidates)
 {
-    int deltaBest = 10000;
-    int numBest = 0;
-    int tolerance = gCoreContext->GetNumSetting("MetadataLookupTolerance", 5);
+    float best_match_quality = 0.6F;    // require at least a 60% match
+    QString actualLower = actual.toLower();
     QString best;
 
     QStringList::ConstIterator i = candidates.begin();
     while ( i != candidates.end() )
     {
         QString candidate = *i;
-        int delta = editDistance( actual.toLower(), candidate.toLower() );
-        if ( delta < deltaBest )
+        float match_quality = getStringMatchQuality(actualLower, candidate.toLower());
+        if (match_quality >= best_match_quality)
         {
-            deltaBest = delta;
-            numBest = 1;
-            best = *i;
-        }
-        else if ( delta == deltaBest )
-        {
-            numBest++;
+            best_match_quality = match_quality;
+            best = candidate;
         }
         ++i;
     }
 
-    if ( numBest == 1 && deltaBest <= tolerance &&
-       actual.length() + best.length() >= 5 )
-        return best;
-    return QString();
+    return best;
 }
 
 QDateTime RFC822TimeToQDateTime(const QString& t)

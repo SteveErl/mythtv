@@ -4924,6 +4924,52 @@ void ProgramInfo::SaveSeasonEpisode(uint seas, uint ep)
     SendUpdateEvent();
 }
 
+void ProgramInfo::SaveSubtitle(const QString &subtitle)
+{
+    MSqlQuery query(MSqlQuery::InitCon());
+
+    query.prepare(
+        "UPDATE recorded "
+        "SET subtitle = :SUBTITLE "
+        "WHERE chanid = :CHANID AND starttime = :STARTTIME "
+        "AND recordid = :RECORDID");
+
+    query.bindValue(":SUBTITLE",   subtitle);
+    query.bindValue(":CHANID",     m_chanId);
+    query.bindValue(":STARTTIME",  m_recStartTs);
+    query.bindValue(":RECORDID",   m_recordId);
+    if (!query.exec())
+    {
+        MythDB::DBError("SaveSubtitle", query);
+        return;
+    }
+
+    SendUpdateEvent();
+}
+
+void ProgramInfo::SaveDescription(const QString &desc)
+{
+    MSqlQuery query(MSqlQuery::InitCon());
+
+    query.prepare(
+        "UPDATE recorded "
+        "SET description = :DESCRIPTION "
+        "WHERE chanid = :CHANID AND starttime = :STARTTIME "
+        "AND recordid = :RECORDID");
+
+    query.bindValue(":DESCRIPTION",desc);
+    query.bindValue(":CHANID",     m_chanId);
+    query.bindValue(":STARTTIME",  m_recStartTs);
+    query.bindValue(":RECORDID",   m_recordId);
+    if (!query.exec())
+    {
+        MythDB::DBError("SaveDescription", query);
+        return;
+    }
+
+    SendUpdateEvent();
+}
+
 void ProgramInfo::SaveInetRef(const QString &inet)
 {
     MSqlQuery query(MSqlQuery::InitCon());
@@ -6391,6 +6437,22 @@ uint64_t ProgramInfo::GetFilesize(void) const
             .arg(db_filesize));
 
     return db_filesize;
+}
+
+// brief Query type from record rule
+RecordingType ProgramInfo::QueryRecordRuleType(void) const
+{
+    MSqlQuery query(MSqlQuery::InitCon());
+    query.prepare("SELECT type FROM record "
+                  "WHERE recordid = :RECORDID ");
+    query.bindValue(":RECORDID", m_recordId);
+
+    RecordingType rt = kNotRecording;
+
+    if (query.exec() && query.next())
+        rt = static_cast<RecordingType>(query.value(0).toUInt());
+
+    return rt;
 }
 
 void ProgramInfo::CalculateRecordedProgress()

@@ -106,30 +106,26 @@ void MetadataDownload::run()
                     list = readNFO(nfo, lookup);
             }
 
-            // If nothing found, create lookups based on filename
+            // If nothing found, create lookups based on base title
             if (list.isEmpty())
             {
                 if (lookup->GetSubtype() == kProbableTelevision)
                 {
                     list = handleTelevision(lookup);
-                    if ((findExactMatchCount(list, lookup->GetBaseTitle(), true) == 0) ||
-                        (list.size() > 1 && !lookup->GetAutomatic()))
+                    if (findExactMatchCount(list, lookup->GetBaseTitle(), true) == 0)
                     {
                         // There are no exact match prospects with artwork from TV search,
                         // so add in movies, where we might find a better match.
-                        // In case of manual mode and ambiguous result, add it as well.
                         list.append(handleMovie(lookup));
                     }
                 }
                 else if (lookup->GetSubtype() == kProbableMovie)
                 {
                     list = handleMovie(lookup);
-                    if ((findExactMatchCount(list, lookup->GetBaseTitle(), true) == 0) ||
-                        (list.size() > 1 && !lookup->GetAutomatic()))
+                    if (findExactMatchCount(list, lookup->GetBaseTitle(), true) == 0)
                     {
                         // There are no exact match prospects with artwork from Movie search
                         // so add in television, where we might find a better match.
-                        // In case of manual mode and ambiguous result, add it as well.
                         list.append(handleTelevision(lookup));
                     }
                 }
@@ -215,9 +211,12 @@ void MetadataDownload::run()
             }
 
             LOG(VB_GENERAL, LOG_INFO,
-                QString("Returning Metadata Results: %1 %2 %3")
-                    .arg(lookup->GetBaseTitle()).arg(lookup->GetSeason())
-                    .arg(lookup->GetEpisode()));
+                QString("Returning Metadata Results: '%1' %2 %3 subt='%4' desc='%5'")
+                    .arg(lookup->GetBaseTitle())
+                    .arg(lookup->GetSeason())
+                    .arg(lookup->GetEpisode())
+                    .arg(lookup->GetSubtitle())
+                    .arg(lookup->GetDescription()));
             QCoreApplication::postEvent(m_parent,
                 new MetadataLookupEvent(list));
         }
@@ -255,8 +254,6 @@ unsigned int MetadataDownload::findExactMatchCount(MetadataLookupList list,
         // Consider exact title matches (ignoring case)
         if ((QString::compare(lkup->GetTitle(), originaltitle, Qt::CaseInsensitive) == 0))
         {
-            // In lookup by name, the television database tends to only include Banner artwork.
-            // In lookup by name, the movie database tends to include only Fan and Cover artwork.
             if ((!(lkup->GetArtwork(kArtworkFanart)).empty()) ||
                 (!(lkup->GetArtwork(kArtworkCoverart)).empty()) ||
                 (!(lkup->GetArtwork(kArtworkBanner)).empty()))
@@ -277,81 +274,119 @@ MetadataLookup* MetadataDownload::findBestMatch(MetadataLookupList list,
 {
     QStringList titles;
     MetadataLookup *ret = nullptr;
-    QDate exactTitleDate;
-    float exactTitlePopularity = 0.0F;
-    int exactMatches = 0;
-    int exactMatchesWithArt = 0;
-    bool foundMatchWithArt = false;
+    QDate bestTitleDate = QDate(1895, 12, 1);  // earliest movie was 12/28/1895
+    float bestTitlePopularity = 0.0F;
+    unsigned int exactMatches = 0;
+    unsigned int closeMatches = 0;
+    unsigned int bestScoreSoFar = 0;
 
     // Build a list of all the titles
     for (auto lkup : qAsConst(list))
     {
+        // Calculate a score based on an exact title match,
+        // close title match, matching language, availability
+        // of artwork, popularity, and release date.
+        unsigned int score = 0;
+
         QString title = lkup->GetTitle();
-        LOG(VB_GENERAL, LOG_INFO, QString("Comparing metadata title '%1' [%2] to recording title '%3'")
-                .arg(title, lkup->GetReleaseDate().toString(), originaltitle));
-        // Consider exact title matches (ignoring case), which have some artwork available.
-        if (QString::compare(title, originaltitle, Qt::CaseInsensitive) == 0)
+        float match_quality = getStringMatchQuality(title.toLower(), originaltitle.toLower());
+
+        // Look for exact title match
+        if (match_quality == 1.0F)
         {
-            bool hasArtwork = ((!(lkup->GetArtwork(kArtworkFanart)).empty()) ||
-                               (!(lkup->GetArtwork(kArtworkCoverart)).empty()) ||
-                               (!(lkup->GetArtwork(kArtworkBanner)).empty()));
-
-            LOG(VB_GENERAL, LOG_INFO, QString("'%1', popularity = %2, ReleaseDate = %3")
-                    .arg(title)
-                    .arg(lkup->GetPopularity())
-                    .arg(lkup->GetReleaseDate().toString()));
-
-            // After the first exact match, prefer any more popular one.
-            // Most of the Movie database entries have Popularity fields.
-            // The TV series database generally has no Popularity values specified,
-            // so if none are found so far in the search, pick the most recently
-            // released entry with artwork. Also, if the first exact match had
-            // no artwork, prefer any later exact match with artwork.
-            if ((ret == nullptr) ||
-                (hasArtwork &&
-                 ((!foundMatchWithArt) ||
-                  ((lkup->GetPopularity() > exactTitlePopularity)) ||
-                  ((exactTitlePopularity == 0.0F) && (lkup->GetReleaseDate() > exactTitleDate)))))
-            {
-                exactTitleDate = lkup->GetReleaseDate();
-                exactTitlePopularity = lkup->GetPopularity();
-                ret = lkup;
-            }
+            score = 0x40; // exact title
             exactMatches++;
-            if (hasArtwork)
-            {
-                foundMatchWithArt = true;
-                exactMatchesWithArt++;
-            }
         }
+
+        // Look for a close title match
+        if (match_quality >= 0.7F)
+        {
+            score |= 0x20; // close (70%) title
+            closeMatches++;
+        }
+
+        if (QString::compare(gCoreContext->GetLanguage(), lkup->GetLanguage()) == 0)
+        {
+            score |= 0x10;  // matching language
+        }
+
+        if (!(lkup->GetArtwork(kArtworkFanart)).empty())
+        {
+            score |= 0x08;  // background artwork available
+        }
+
+        if (!(lkup->GetArtwork(kArtworkCoverart)).empty())
+        {
+            score |= 0x04;  // cover artwork available
+        }
+
+        // Compare popularity to the best match so far
+        if (lkup->GetPopularity() > bestTitlePopularity)
+        {
+            score |= 0x02;  // more popular
+        }
+
+        // Compare release date to the best match so far
+        if (lkup->GetReleaseDate() > bestTitleDate)
+        {
+            score |= 0x01;  // more recent
+        }
+
+        if (score >= bestScoreSoFar)
+        {
+            // remember the best match, so far
+            bestTitleDate = lkup->GetReleaseDate();
+            bestTitlePopularity = lkup->GetPopularity();
+            ret = lkup;
+            bestScoreSoFar = score;
+        }
+
+        LOG(VB_GENERAL, LOG_INFO,
+            QString("Comparing metadata title '%1' [%2] to recording title '%3', score=0x%4")
+            .arg(title, lkup->GetReleaseDate().toString(), originaltitle)
+            .arg(score, 2, 16));
 
         titles.append(title);
     }
 
-    LOG(VB_GENERAL, LOG_DEBUG, QString("exactMatches = %1, exactMatchesWithArt = %2")
-            .arg(exactMatches)
-            .arg(exactMatchesWithArt));
-
-    // If there was one or more exact matches then we can skip a more intensive
+    // If there was one or more close matches then we can skip a more intensive
     // and time consuming search
-    if (exactMatches > 0)
+    if (closeMatches > 0)
     {
         if (exactMatches == 1)
         {
             LOG(VB_GENERAL, LOG_INFO, QString("Single exact title match for '%1'")
                     .arg(originaltitle));
         }
+        else if (closeMatches == 1)
+        {
+            LOG(VB_GENERAL, LOG_INFO, QString("Single close title match for '%1'")
+                    .arg(originaltitle));
+        }
+        else if (exactMatches > 1)
+        {
+            LOG(VB_GENERAL, LOG_INFO,
+                QString("%1 exact title matches found for '%2'. "
+                        "Selecting best version '%3' [%4]")
+                    .arg(exactMatches)
+                    .arg(originaltitle)
+                    .arg(ret->GetTitle())
+                    .arg(bestTitleDate.toString()));
+        }
         else
         {
             LOG(VB_GENERAL, LOG_INFO,
-                QString("Multiple exact title matches found for '%1'. "
-                        "Selecting most popular or most recent [%2]")
-                    .arg(originaltitle, exactTitleDate.toString()));
+                QString("%1 close title matches found for '%2'. "
+                        "Selecting best version '%3' [%4]")
+                    .arg(closeMatches)
+                    .arg(originaltitle)
+                    .arg(ret->GetTitle())
+                    .arg(bestTitleDate.toString()));
         }
         return ret;
     }
 
-    // Apply Levenshtein distance algorithm to determine closest match
+    // Apply algorithm to determine closest match
     QString bestTitle = nearestName(originaltitle, titles);
 
     // If no "best" was chosen, give up.
@@ -655,17 +690,31 @@ MetadataLookupList MetadataDownload::handleTelevision(MetadataLookup *lookup)
     {
         // with inetref
         lookup->SetStep(kLookupData);
-        if (lookup->GetSeason() || lookup->GetEpisode())
+        if (lookup->GetSeason() && lookup->GetEpisode())
         {
-            list = grabber.LookupData(lookup->GetInetref(), lookup->GetSeason(),
+            list = grabber.LookupData(lookup->GetInetref(),
+                                      lookup->GetSeason(),
                                       lookup->GetEpisode(), lookup);
         }
-
-        if (list.isEmpty() && (!lookup->GetSubtitle().isEmpty()))
+        else if (!lookup->GetSubtitle().isEmpty())
         {
             list = grabber.SearchSubtitle(lookup->GetInetref(),
                                           lookup->GetBaseTitle() /* unused */,
                                           lookup->GetSubtitle(), lookup, false);
+        }
+        else
+        {
+            // Passing a start of the recording timestamp to the metadata
+            // lookup might allow it to find specific information for an
+            // episode. The TvMaze API provides a syntax to search using
+            // such a timestamp. If the recording is an original broadcast
+            // (not a rerun), a match can provide season number, episode
+            // number, subtitle, and description.
+            QString utcRecStartStr(lookup->GetStartTS().toLocalTime().toString("yyyy-MM-dd hh:mm:ss"));
+            list = grabber.SearchSubtitle(lookup->GetInetref(),
+                                          lookup->GetBaseTitle() /* unused */,
+                                          utcRecStartStr,
+                                          lookup, false);
         }
 
         if (list.isEmpty() && !lookup->GetCollectionref().isEmpty())
@@ -693,6 +742,22 @@ MetadataLookupList MetadataDownload::handleTelevision(MetadataLookup *lookup)
         {
             list = grabber.SearchSubtitle(lookup->GetBaseTitle(),
                                           lookup->GetSubtitle(), lookup, false);
+        }
+        else
+        {
+            // Passing a start of the recording timestamp to the metadata
+            // lookup might allow it to find specific information for an
+            // episode. The TvMaze API provides a syntax to search using
+            // such a timestamp. If the recording is an original broadcast
+            // (not a rerun), a match can provide season number, episode
+            // number, subtitle, and description.
+            QString utcRecStartStr(lookup->GetStartTS().toLocalTime().toString("yyyy-MM-dd hh:mm:ss"));
+            if (utcRecStartStr.size() != 0)
+            {
+                list = grabber.SearchSubtitle(lookup->GetBaseTitle(),
+                                              utcRecStartStr,
+                                              lookup, false);
+            }
         }
         if (list.isEmpty())
         {

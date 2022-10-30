@@ -273,6 +273,11 @@ class META_PUBLIC MetadataLookup : public QObject, public ReferenceCounter
     void SetIsCollection(bool collection) { m_isCollection = collection; };
     void SetPreferDVDOrdering(bool preferdvdorder)
                              { m_dvdOrder = preferdvdorder; };
+    void SetDescription(const QString &desc) { m_description = desc; };
+    void SetScheduledStartTime(const QDateTime &dt) { m_startTs = dt; };
+    void SetScheduledEndTime(const QDateTime &dt) { m_endTs = dt; };
+    void SetRecordingStartTime(const QDateTime &dt) { m_recStartTs = dt; };
+    void SetRecordingEndTime(const QDateTime &dt) { m_recEndTs = dt; };
 
     // General Sets - Music
     void SetAlbum(const QString &album) { m_album = album; };
@@ -397,7 +402,7 @@ class META_PUBLIC MetadataLookup : public QObject, public ReferenceCounter
     // General - Video & ProgramInfo
     QString m_subtitle;
     const QString m_tagline;
-    const QString m_description;
+    QString m_description;
     uint          m_season  {0};
     uint          m_episode {0};
     uint          m_chanId  {0};
@@ -410,10 +415,10 @@ class META_PUBLIC MetadataLookup : public QObject, public ReferenceCounter
     const QString m_seriesId;
     const QString m_programid;
     const QString m_storageGroup;
-    const QDateTime m_startTs;
-    const QDateTime m_endTs;
-    const QDateTime m_recStartTs;
-    const QDateTime m_recEndTs;
+    QDateTime m_startTs;
+    QDateTime m_endTs;
+    QDateTime m_recStartTs;
+    QDateTime m_recEndTs;
     uint m_programFlags     {0};
     uint m_audioProperties  {0};
     uint m_videoProperties  {0};
@@ -493,6 +498,8 @@ META_PUBLIC PeopleMap ParsePeople(const QDomElement& people);
 META_PUBLIC ArtworkMap ParseArtwork(const QDomElement& artwork);
 
 META_PUBLIC int editDistance(const QString &s, const QString &t);
+META_PUBLIC float getStringMatchQuality(const QString& strOne,
+                                        const QString& strTwo);
 META_PUBLIC QString nearestName(const QString &actual,
                                 const QStringList &candidates);
 

@@ -225,6 +225,8 @@ void LookerUpper::CopyRuleInetrefsToRecordings()
 
 void LookerUpper::customEvent(QEvent *levent)
 {
+    QString manRecSuffix = QString(" (%1)").arg(QObject::tr("Manual Record"));
+
     if (levent->type() == MetadataFactoryMultiResult::kEventType)
     {
         auto *mfmr = dynamic_cast<MetadataFactoryMultiResult*>(levent);
@@ -237,46 +239,115 @@ void LookerUpper::customEvent(QEvent *levent)
         if (list.count() > 1)
         {
             int yearindex = -1;
-            MetadataLookup *exactTitleMeta = nullptr;
-            QDate exactTitleDate;
-            float exactTitlePopularity = 0.0;
-            bool foundMatchWithArt = false;
+            MetadataLookup *bestTitleMeta = nullptr;
+            QDate bestTitleDate;
+            float bestTitlePopularity = 0.0;
+            unsigned int bestScoreSoFar = 0;
 
             for (int p = 0; p != list.size(); ++p)
             {
+                // Calculate a score based on an exact title match, a matching language,
+                // availability of artwork, popularity, and release date.
+                unsigned int score = 0;
+
                 auto *pginfo = list[p]->GetData().value<ProgramInfo *>();
+                QString title = pginfo->GetTitle();
+                title.replace(manRecSuffix,"");
 
-                if (pginfo && (QString::compare(pginfo->GetTitle(), list[p]->GetBaseTitle(), Qt::CaseInsensitive)) == 0)
+                float match_quality = getStringMatchQuality(title.toLower(),
+                                          list[p]->GetBaseTitle().toLower());
+
+                if (match_quality == 1.0F)
                 {
-                    bool hasArtwork = ((!(list[p]->GetArtwork(kArtworkFanart)).empty()) ||
-                                       (!(list[p]->GetArtwork(kArtworkCoverart)).empty()) ||
-                                       (!(list[p]->GetArtwork(kArtworkBanner)).empty()));
-
-                    // After the first exact match, prefer any more popular one.
-                    // Most of the Movie database entries have Popularity fields.
-                    // The TV series database generally has no Popularity values specified,
-                    // so if none are found so far in the search, pick the most recently
-                    // released entry with artwork. Also, if the first exact match had
-                    // no artwork, prefer any later exact match with artwork.
-                    if ((exactTitleMeta == nullptr) ||
-                        (hasArtwork &&
-                         ((!foundMatchWithArt) ||
-                          ((list[p]->GetPopularity() > exactTitlePopularity)) ||
-                          ((exactTitlePopularity == 0.0F) && (list[p]->GetReleaseDate() > exactTitleDate)))))
-                    {
-                        // remember the most popular or most recently released exact match
-                        exactTitleDate = list[p]->GetReleaseDate();
-                        exactTitlePopularity = list[p]->GetPopularity();
-                        exactTitleMeta = list[p];
-                    }
+                    score = 0x40; // exact title match
                 }
+
+                if (match_quality >= 0.7F)
+                {
+                    score |= 0x20; // close (70%) title match
+                }
+
+                if (QString::compare(gCoreContext->GetLanguage(), list[p]->GetLanguage()) == 0)
+                {
+                    score |= 0x10;  // matching language
+                }
+
+                if (!(list[p]->GetArtwork(kArtworkFanart)).empty())
+                {
+                    score |= 0x08;  // background artwork available
+                }
+
+                if (!(list[p]->GetArtwork(kArtworkCoverart)).empty())
+                {
+                    score |= 0x04;  // cover artwork available
+                }
+
+                // Compare popularity to the best match so far
+                if (list[p]->GetPopularity() > bestTitlePopularity)
+                {
+                    score |= 0x02;  // more popular
+                }
+
+                // Compare release date to the best match so far
+                if (list[p]->GetReleaseDate() > bestTitleDate)
+                {
+                    score |= 0x01;  // more recent
+                }
+
+                if (score >= bestScoreSoFar)
+                {
+                    // remember the best match, so far
+                    bestTitleMeta = list[p];   // set the best match, so far
+                    bestTitleDate = bestTitleMeta->GetReleaseDate();
+                    bestTitlePopularity = bestTitleMeta->GetPopularity();
+                    bestScoreSoFar = score;
+                }
+
+                LOG(VB_GENERAL, LOG_INFO,
+                    QString("Comparing metadata title '%1' [%2] to recording title '%3', score=0x%4")
+                    .arg(title, list[p]->GetReleaseDate().toString(), list[p]->GetBaseTitle())
+                    .arg(score, 2, 16));
 
                 if (pginfo && !pginfo->GetSeriesID().isEmpty() &&
                     pginfo->GetSeriesID() == (list[p])->GetTMSref())
                 {
                     MetadataLookup *lookup = list[p];
                     if (lookup->GetSubtype() != kProbableGenericTelevision)
-                        pginfo->SaveSeasonEpisode(lookup->GetSeason(), lookup->GetEpisode());
+                    {
+                        if (((pginfo->GetSeason() == 0) && lookup->GetSeason()) ||
+                            ((pginfo->GetEpisode() == 0) && lookup->GetEpisode()))
+                        {
+                            pginfo->SaveSeasonEpisode(lookup->GetSeason(), lookup->GetEpisode());
+                        }
+                        if (pginfo->GetSubtitle().isEmpty() && !lookup->GetSubtitle().isEmpty())
+                        {
+                            pginfo->SaveSubtitle(lookup->GetSubtitle());
+                        }
+                        if (list[p]->GetTitle().contains(manRecSuffix))
+                        {
+                            // It was a Manual Record rule.
+                            // For such recordings, the 'description' field may be populated
+                            // with a Timestamp, from Scheduler::UpdateManuals(uint recordid),
+                            // or with the Title, possibly from ProgramInfo::ProgramInfo().
+                            // Neither a Timestamp nor a Title are of value in a Description
+                            // field, so we want to overwrite them with a real description.
+                            pginfo->SaveDescription(lookup->GetDescription());
+                        }
+                        else
+                        {
+                            // A Program Guide record rule.
+                            // These recordings may have already collected a specific
+                            // description for the episode. We don't want to overwrite
+                            // the specific episode description with a generic description
+                            // which the lookup service might provide for the series. So,
+                            // only save the lookup description if the current description
+                            // is empty at this point.
+                            if (pginfo->GetDescription().isEmpty() && !lookup->GetDescription().isEmpty())
+                            {
+                                pginfo->SaveDescription(lookup->GetDescription());
+                            }
+                        }
+                    }
                     pginfo->SaveInetRef(lookup->GetInetref());
                     m_busyRecList.removeAll(pginfo);
                     return;
@@ -292,7 +363,7 @@ void LookerUpper::customEvent(QEvent *levent)
                         m_busyRecList.removeAll(pginfo);
                         return;
                     }
-                    LOG(VB_GENERAL, LOG_INFO, "Matched from multiple results based on year. ");
+                    LOG(VB_GENERAL, LOG_INFO, "Matched from multiple results based on year.");
                     yearindex = p;
                 }
             }
@@ -302,19 +373,87 @@ void LookerUpper::customEvent(QEvent *levent)
                 MetadataLookup *lookup = list[yearindex];
                 auto *pginfo = lookup->GetData().value<ProgramInfo *>();
                 if (lookup->GetSubtype() != kProbableGenericTelevision)
-                    pginfo->SaveSeasonEpisode(lookup->GetSeason(), lookup->GetEpisode());
+                {
+                    if (((pginfo->GetSeason() == 0) && lookup->GetSeason()) ||
+                        ((pginfo->GetEpisode() == 0) && lookup->GetEpisode()))
+                    {
+                        pginfo->SaveSeasonEpisode(lookup->GetSeason(), lookup->GetEpisode());
+                    }
+                    if (pginfo->GetSubtitle().isEmpty() && !lookup->GetSubtitle().isEmpty())
+                    {
+                        pginfo->SaveSubtitle(lookup->GetSubtitle());
+                    }
+                    if (pginfo->GetTitle().contains(manRecSuffix))
+                    {
+                        // It was a Manual Record rule.
+                        // For such recordings, the 'description' field may be populated
+                        // with a Timestamp, from Scheduler::UpdateManuals(uint recordid),
+                        // or with the Title, possibly from ProgramInfo::ProgramInfo().
+                        // Neither a Timestamp nor a Title are of value in a Description
+                        // field, so we want to overwrite them with a real description.
+                        pginfo->SaveDescription(lookup->GetDescription());
+                    }
+                    else
+                    {
+                        // A Program Guide record rule.
+                        // These recordings may have already collected a specific
+                        // description for the episode. We don't want to overwrite
+                        // the specific episode description with a generic description
+                        // which the lookup service might provide for the series. So,
+                        // only save the lookup description if the current description
+                        // is empty at this point.
+                        if (pginfo->GetDescription().isEmpty() && !lookup->GetDescription().isEmpty())
+                        {
+                            pginfo->SaveDescription(lookup->GetDescription());
+                        }
+                    }
+                }
                 pginfo->SaveInetRef(lookup->GetInetref());
                 m_busyRecList.removeAll(pginfo);
                 return;
             }
 
-            if (exactTitleMeta != nullptr)
+            if (bestTitleMeta != nullptr)
             {
-                LOG(VB_GENERAL, LOG_INFO, QString("Best match released %1").arg(exactTitleDate.toString()));
-                MetadataLookup *lookup = exactTitleMeta;
-                auto *pginfo = exactTitleMeta->GetData().value<ProgramInfo *>();
+                LOG(VB_GENERAL, LOG_INFO, QString("Best match released %1").arg(bestTitleDate.toString()));
+                MetadataLookup *lookup = bestTitleMeta;
+                auto *pginfo = bestTitleMeta->GetData().value<ProgramInfo *>();
                 if (lookup->GetSubtype() != kProbableGenericTelevision)
-                    pginfo->SaveSeasonEpisode(lookup->GetSeason(), lookup->GetEpisode());
+                {
+                    if (((pginfo->GetSeason() == 0) && lookup->GetSeason()) ||
+                        ((pginfo->GetEpisode() == 0) && lookup->GetEpisode()))
+                    {
+                        pginfo->SaveSeasonEpisode(lookup->GetSeason(), lookup->GetEpisode());
+                    }
+                    if (pginfo->GetSubtitle().isEmpty() && !lookup->GetSubtitle().isEmpty())
+                    {
+                        pginfo->SaveSubtitle(lookup->GetSubtitle());
+                    }
+                    if (pginfo->GetTitle().contains(manRecSuffix))
+                    {
+                        // It was a Manual Record rule.
+                        // For such recordings, the 'description' field may be populated
+                        // with a Timestamp, from Scheduler::UpdateManuals(uint recordid),
+                        // or with the Title, possibly from ProgramInfo::ProgramInfo().
+                        // Neither a Timestamp nor a Title are of value in a Description
+                        // field, so we want to overwrite them with a real description.
+                        pginfo->SaveDescription(lookup->GetDescription());
+                    }
+                    else
+                    {
+                        // A Program Guide record rule.
+                        // These recordings may have already collected a specific
+                        // description for the episode. We don't want to overwrite
+                        // the specific episode description with a generic description
+                        // which the lookup service might provide for the series. So,
+                        // only save the lookup description if the current description
+                        // is empty at this point.
+                        if (pginfo->GetDescription().isEmpty() && !lookup->GetDescription().isEmpty())
+                        {
+                            pginfo->SaveDescription(lookup->GetDescription());
+                        }
+                    }
+                }
                 pginfo->SaveInetRef(lookup->GetInetref());
                 m_busyRecList.removeAll(pginfo);
                 return;
@@ -370,7 +509,41 @@ void LookerUpper::customEvent(QEvent *levent)
             QString("        User Rating: %1").arg(lookup->GetUserRating()));
 
         if (lookup->GetSubtype() != kProbableGenericTelevision)
-            pginfo->SaveSeasonEpisode(lookup->GetSeason(), lookup->GetEpisode());
+        {
+            if (((pginfo->GetSeason() == 0) && lookup->GetSeason()) ||
+                ((pginfo->GetEpisode() == 0) && lookup->GetEpisode()))
+            {
+                pginfo->SaveSeasonEpisode(lookup->GetSeason(), lookup->GetEpisode());
+            }
+            if (pginfo->GetSubtitle().isEmpty() && !lookup->GetSubtitle().isEmpty())
+            {
+                pginfo->SaveSubtitle(lookup->GetSubtitle());
+            }
+            if (pginfo->GetTitle().contains(manRecSuffix))
+            {
+                // It was a Manual Record rule.
+                // For such recordings, the 'description' field may be populated
+                // with a Timestamp, from Scheduler::UpdateManuals(uint recordid),
+                // or with the Title, possibly from ProgramInfo::ProgramInfo().
+                // Neither a Timestamp nor a Title are of value in a Description
+                // field, so we want to overwrite them with a real description.
+                pginfo->SaveDescription(lookup->GetDescription());
+            }
+            else
+            {
+                // A Program Guide record rule.
+                // These recordings may have already collected a specific
+                // description for the episode. We don't want to overwrite
+                // the specific episode description with a generic description
+                // which the lookup service might provide for the series. So,
+                // only save the lookup description if the current description
+                // is empty at this point.
+                if (pginfo->GetDescription().isEmpty() && !lookup->GetDescription().isEmpty())
+                {
+                    pginfo->SaveDescription(lookup->GetDescription());
+                }
+            }
+        }
         pginfo->SaveInetRef(lookup->GetInetref());
 
         if (m_updaterules)

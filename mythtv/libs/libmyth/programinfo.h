@@ -530,6 +530,7 @@ class MPUBLIC ProgramInfo
     void SetPlaybackGroup( const QString &group)    { m_playGroup    = group; }
     void SetHostname(      const QString &host)     { m_hostname     = host;  }
     void SetStorageGroup(  const QString &group)    { m_storageGroup = group; }
+    void SetDescription(   const QString &desc)     { m_description  = desc;  }
     virtual void SetFilesize( uint64_t       sz); /// TODO Move to RecordingInfo
     void SetSeriesID(      const QString &id)       { m_seriesId     = id;    }
     void SetProgramID(     const QString &id)       { m_programId    = id;    }
@@ -623,6 +624,7 @@ class MPUBLIC ProgramInfo
     uint        QueryTranscoderID(void) const;
     uint64_t    QueryLastFrameInPosMap(void) const;
     bool        Reload(void);
+    RecordingType QueryRecordRuleType(void) const;
 
     // Slow DB sets
     virtual void SaveFilesize(uint64_t fsize); /// TODO Move to RecordingInfo
@@ -651,6 +653,8 @@ class MPUBLIC ProgramInfo
     void MarkAsInUse(bool inuse, const QString& usedFor = "");
     void UpdateInUseMark(bool force = false);
     void SaveSeasonEpisode(uint seas, uint ep);
+    void SaveSubtitle(const QString &subtitle = "");
+    void SaveDescription(const QString &desc = "");
     void SaveInetRef(const QString &inet);
 
     // Extremely slow functions that cannot be called from the UI thread.
