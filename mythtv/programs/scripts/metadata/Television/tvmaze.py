@@ -140,8 +140,12 @@ def buildList(tvtitle, opts):
 def buildNumbers(args, opts):
     # either option -N <inetref> <subtitle>   e.g. -N 69 "Elizabeth Keen"
     #    or  option -N <inetref> <date time>  e.g. -N 69 "2021-01-29 19:00:00"
+    #    or  option -N <inetref> <date time> <rbdelay>
+    #                                         e.g. -N 69 "2021-01-29 19:00:00" 60
     #    or  option -N <title> <subtitle>     e.g. -N "The Blacklist" "Elizabeth Keen"
     #    or  option -N <title> <date time>    e.g. -N "The Blacklist" "2021-01-29 19:00:00"
+    #    or  option -N <title> <date time> <rbdelay>
+    #                                         e.g. -N "The Blacklist" "2021-01-29 19:00:00 60"
     from MythTV.utility import levenshtein
     from MythTV.utility.dt import posixtzinfo
     from MythTV.tvmaze import tvmaze_api as tvmaze
@@ -210,8 +214,48 @@ def buildNumbers(args, opts):
     # check whether the 'subtitle' is really a timestamp
     try:
         dtInLocalZone = datetime.strptime(tvsubtitle, "%Y-%m-%d %H:%M:%S") # defaults to local timezone
+
+        # The user may optionally specify a 'Broadcast Delay'.
+        #
+        #   https://en.wikipedia.org/wiki/Broadcast_delay
+        #   ---------------------------------------------
+        #   In countries that span multiple time zones and have
+        #   influential domestic eastern regions, such as Australia,
+        #   Canada, Mexico and the United States, television networks
+        #   usually delay the entirety of their schedule for stations
+        #   in the west, so prime time programming can be time shifted
+        #   to air in local primetime hours to improve accessibility
+        #   and viewership.
+        #
+        # There are also some broadcasts which are shown without a
+        # Broadcast Delay, such as live sporting events. When we are
+        # looking for a match by timestamp, we may need to try both
+        # with and without a rebroadcast delay. For example, for an
+        # 8pm show in New York:
+        #                      UTC    Rebroadcast Local-Airing-Time Prime
+        #  Timezone            offset Delay (min) Live  Rebroadcast Time
+        #  ------------------- ---    ----------- ----- ----------- -----
+        #  America/New_York    -5     none        20:00             8pm
+        #  America/Chicago     -6     none        19:00             7pm
+        #  America/Denver      -7     60          18:00   19:00     7pm
+        #  America/Los_Angeles -8     180         17:00   20:00     8pm
+        #  America/Anchorage   -9     180         16:00   19:00     7pm
+        #  Pacific/Honolulu    -10    240         15:00   19:00     7pm
+        #
+        # The Rebroadcast Delay (in minutes) may be specified
+        # with a 3rd argument or with an environmental variable.
+        if len(args) > 2:
+            rbDelayMinutes = int(args[2])
+        else:
+            mrdStr = os.environ.get('MYTH_REBROADCAST_DELAY')
+            if mrdStr:
+                rbDelayMinutes = int(mrdStr)
+            else:
+                rbDelayMinutes = None
+
     except ValueError:
         dtInLocalZone = None
+        rbDelayMinutes = None
 
     matchesFound = 0
     best_ep_quality = 0.5   # require at least this quality on string match
@@ -241,6 +285,8 @@ def buildNumbers(args, opts):
 
         if dtInTgtZone:
             # get episode info based on inetref and datetime in target zone
+            if rbDelayMinutes:
+                undelDtInTgtZone = dtInTgtZone - timedelta(minutes=rbDelayMinutes)
             try:
                 # From https://www.tvmaze.com/faq/15/episodes :
                 # To ensure that the episode airdates on TVmaze are
@@ -253,7 +299,16 @@ def buildNumbers(args, opts):
                 else:
                     episodes = tvmaze.get_show_episodes_by_date(inetref, dtInTgtZone)
 
+                # If no episodes found yet, try adjusting for broadcast delay
+                if not episodes and rbDelayMinutes:
+                    if undelDtInTgtZone.hour < 5:
+                        episodes = tvmaze.get_show_episodes_by_date(inetref,
+                            undelDtInTgtZone - timedelta(hours=5))
+                    else:
+                        episodes = tvmaze.get_show_episodes_by_date(inetref, undelDtInTgtZone)
             except SystemExit:
+                if opts.debug:
+                    print("get_show_episode_list : no episodes found")
                 episodes = []
             time_match_list = []
             early_match_list = []
@@ -298,6 +353,38 @@ def buildNumbers(args, opts):
                             minTimeDelta = epInTgtZone - dtInTgtZone
                             early_match_list = [i]
 
+                    if rbDelayMinutes and not time_match_list and not early_match_list:
+                        if epInTgtZone == undelDtInTgtZone:
+                            if opts.debug:
+                                print('Recording matches rebroadcast \'%s\' at %s' % (ep, epInTgtZone))
+                            time_match_list.append(i)
+                            minTimeDelta = timedelta(minutes=0)
+                        # Consider it a match if the recording starts late,
+                        # but within the duration of the show.
+                        elif epInTgtZone < undelDtInTgtZone < epInTgtZone+durationDelta:
+                            # Recording start time is within the range of this episode
+                            if opts.debug:
+                                print('Recording in rebroadcast range of \'%s\' (%s ... %s)' \
+                                    % (ep, epInTgtZone, epInTgtZone+durationDelta))
+                            time_match_list.append(i)
+                            minTimeDelta = timedelta(minutes=0)
+                        # Consider it a match if the recording is a little bit early. This helps cases
+                        # where you set up a rule to record, at say 9:00, and the broadcaster uses a
+                        # slightly odd start time, like 9:05.
+                        elif epInTgtZone-minTimeDelta <= undelDtInTgtZone < epInTgtZone:
+                            # Recording started earlier than this episode, so see if it's the closest match
+                            if epInTgtZone - undelDtInTgtZone == minTimeDelta:
+                                if opts.debug:
+                                    print('Adding rebroadcast episode \'%s\' to closest list. Offset = %s' \
+                                        % (ep, epInTgtZone - undelDtInTgtZone))
+                                early_match_list.append(i)
+                            elif epInTgtZone - undelDtInTgtZone < minTimeDelta:
+                                if opts.debug:
+                                    print('Rebroadcast episode \'%s\' is new closest. Offset = %s' \
+                                        % (ep, epInTgtZone - undelDtInTgtZone))
+                                minTimeDelta = epInTgtZone - undelDtInTgtZone
+                                early_match_list = [i]
+
                 # In some cases, tvmaze only specifies the date and not the time.
                 # This is most common in webChannel originated shows. For example:
                 #  tvmaze.py -N "Criminal Minds" "2022-11-24 21:00:00"
@@ -310,6 +397,11 @@ def buildNumbers(args, opts):
                     if epDateInTgtZone <= dtInTgtZone < epDateInTgtZone+timedelta(hours=24):
                         if opts.debug:
                             print('Adding episode \'%s\' to date match list' % ep)
+                        date_match_list.append(i)
+                    elif rbDelayMinutes and \
+                        (epDateInTgtZone <= undelDtInTgtZone < epDateInTgtZone+timedelta(hours=24)):
+                        if opts.debug:
+                            print('Adding rebroadcast episode \'%s\' to date match list' % ep)
                         date_match_list.append(i)
 
             if not time_match_list:
@@ -681,6 +773,16 @@ def main():
     Main executor for MythTV's tvmaze grabber.
     """
 
+    # We want to allow the user to specify a negative number
+    # for a Rebroadcast Delay, but by default the OptionParser
+    # routine will interpret the '-' at the beginning to
+    # be an optional argument indicator instead of a negative
+    # sign. Avoid this by adding a space in front of any
+    # negative number argument.
+    for idx, argument in enumerate(sys.argv):
+        if (argument[0] == '-') and argument[1].isdigit():
+            sys.argv[idx] = ' ' + argument
+
     parser = OptionParser()
 
     parser.add_option('-v', "--version", action="store_true", default=False,
@@ -761,10 +863,14 @@ def main():
             if opts.tvnumbers:
                 # either option -N inetref subtitle
                 # or  option -N title subtitle
-                if (len(args) != 2) or (len(args[0]) == 0) or (len(args[1]) == 0):
-                    sys.stdout.write('ERROR: tvmaze -N requires exactly two non-empty arguments')
+                # or  option -N title timestamp
+                # or  option -N title timestamp rbdelay
+                if ((len(args) == 2) and (len(args[0]) != 0) and (len(args[1]) != 0)) \
+                or ((len(args) == 3) and (len(args[0]) != 0) and (len(args[1]) != 0) and (len(args[2]) != 0)):
+                    buildNumbers(args, opts)
+                else:
+                    sys.stdout.write('ERROR: tvmaze -N requires two or three non-empty arguments. ')
                     sys.exit(1)
-                buildNumbers(args, opts)
 
             if opts.tvdata:
                 # option -D inetref season episode
