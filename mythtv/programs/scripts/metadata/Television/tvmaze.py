@@ -242,8 +242,17 @@ def buildNumbers(args, opts):
         if dtInTgtZone:
             # get episode info based on inetref and datetime in target zone
             try:
-                #print('get_show_episodes_by_date(', inetref, ',', dtInTgtZone, ')')
-                episodes = tvmaze.get_show_episodes_by_date(inetref, dtInTgtZone)
+                # From https://www.tvmaze.com/faq/15/episodes :
+                # To ensure that the episode airdates on TVmaze are
+                # in line with the dates used by TV guides and listings
+                # worldwide, episodes that start airing at or after
+                # midnight but before 5:00 are considered part of the
+                # previous day.
+                if dtInTgtZone.hour < 5:
+                    episodes = tvmaze.get_show_episodes_by_date(inetref, dtInTgtZone - timedelta(hours=5))
+                else:
+                    episodes = tvmaze.get_show_episodes_by_date(inetref, dtInTgtZone)
+
             except SystemExit:
                 episodes = []
             time_match_list = []
