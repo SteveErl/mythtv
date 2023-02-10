@@ -249,7 +249,7 @@ def buildNumbers(args, opts):
             time_match_list = []
             early_match_list = []
             date_match_list = []
-            minTimeDelta = timedelta(minutes=60)
+            minTimeDelta = timedelta(minutes=20)
             for i, ep in enumerate(episodes):
                 if ep.timestamp:
                     epInTgtZone = datetime.fromIso(ep.timestamp, tz = posixtzinfo(show_tz))
