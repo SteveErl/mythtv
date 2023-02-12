@@ -243,15 +243,11 @@ def buildNumbers(args, opts):
         #  Pacific/Honolulu    -10    240         15:00   19:00     7pm
         #
         # The Rebroadcast Delay (in minutes) may be specified
-        # with a 3rd argument or with an environmental variable.
+        # with a 3rd argument.
         if len(args) > 2:
             rbDelayMinutes = int(args[2])
         else:
-            mrdStr = os.environ.get('MYTH_REBROADCAST_DELAY')
-            if mrdStr:
-                rbDelayMinutes = int(mrdStr)
-            else:
-                rbDelayMinutes = None
+            rbDelayMinutes = None
 
     except ValueError:
         dtInLocalZone = None
