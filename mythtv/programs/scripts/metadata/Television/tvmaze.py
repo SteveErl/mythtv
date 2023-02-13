@@ -309,7 +309,9 @@ def buildNumbers(args, opts):
             time_match_list = []
             early_match_list = []
             date_match_list = []
-            minTimeDelta = timedelta(minutes=20)
+            # We have a days worth of episodes. Iterate through them
+            # to find the one which is closest to our timestamp.
+            minTimeDelta = timedelta(days=1)
             for i, ep in enumerate(episodes):
                 if ep.timestamp:
                     epInTgtZone = datetime.fromIso(ep.timestamp, tz = posixtzinfo(show_tz))
@@ -317,6 +319,12 @@ def buildNumbers(args, opts):
                         durationDelta = timedelta(minutes=ep.duration)
                     else:
                         durationDelta = timedelta(minutes=0)
+
+                    # Calculate offset for an early match
+                    if durationDelta / 2 < minTimeDelta:
+                        earlyDelta = durationDelta / 2
+                    else:
+                        earlyDelta = minTimeDelta
 
                     if epInTgtZone == dtInTgtZone:
                         if opts.debug:
@@ -335,14 +343,14 @@ def buildNumbers(args, opts):
                     # Consider it a match if the recording is a little bit early. This helps cases
                     # where you set up a rule to record, at say 9:00, and the broadcaster uses a
                     # slightly odd start time, like 9:05.
-                    elif epInTgtZone-minTimeDelta <= dtInTgtZone < epInTgtZone:
+                    elif epInTgtZone-earlyDelta <= dtInTgtZone < epInTgtZone:
                         # Recording started earlier than this episode, so see if it's the closest match
-                        if epInTgtZone - dtInTgtZone == minTimeDelta:
+                        if epInTgtZone - dtInTgtZone == earlyDelta:
                             if opts.debug:
                                 print('Adding episode \'%s\' to closest list. Offset = %s' \
                                     % (ep, epInTgtZone - dtInTgtZone))
                             early_match_list.append(i)
-                        elif epInTgtZone - dtInTgtZone < minTimeDelta:
+                        elif epInTgtZone - dtInTgtZone < earlyDelta:
                             if opts.debug:
                                 print('Episode \'%s\' is new closest. Offset = %s' \
                                     % (ep, epInTgtZone - dtInTgtZone))
@@ -364,17 +372,15 @@ def buildNumbers(args, opts):
                                     % (ep, epInTgtZone, epInTgtZone+durationDelta))
                             time_match_list.append(i)
                             minTimeDelta = timedelta(minutes=0)
-                        # Consider it a match if the recording is a little bit early. This helps cases
-                        # where you set up a rule to record, at say 9:00, and the broadcaster uses a
-                        # slightly odd start time, like 9:05.
-                        elif epInTgtZone-minTimeDelta <= undelDtInTgtZone < epInTgtZone:
+                        # Consider it a match if the recording is a little bit early.
+                        elif epInTgtZone-earlyDelta <= undelDtInTgtZone < epInTgtZone:
                             # Recording started earlier than this episode, so see if it's the closest match
-                            if epInTgtZone - undelDtInTgtZone == minTimeDelta:
+                            if epInTgtZone - undelDtInTgtZone == earlyDelta:
                                 if opts.debug:
                                     print('Adding rebroadcast episode \'%s\' to closest list. Offset = %s' \
                                         % (ep, epInTgtZone - undelDtInTgtZone))
                                 early_match_list.append(i)
-                            elif epInTgtZone - undelDtInTgtZone < minTimeDelta:
+                            elif epInTgtZone - undelDtInTgtZone < earlyDelta:
                                 if opts.debug:
                                     print('Rebroadcast episode \'%s\' is new closest. Offset = %s' \
                                         % (ep, epInTgtZone - undelDtInTgtZone))
