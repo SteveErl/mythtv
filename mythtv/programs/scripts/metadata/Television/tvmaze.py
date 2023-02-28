@@ -735,6 +735,33 @@ def buildCollection(tvinetref, opts):
                                xml_declaration=True))
 
 
+# This routine sets a Rebroadcast Delay value into the MythTv database
+def setrbd(args, opts):
+    # --rebroadcastdelay <minutes>
+    from MythTV.tvmaze import tvmaze_api as tvmaze
+    from MythTV import MythDB
+
+    # set the session
+    if opts.session:
+        tvmaze.set_session(opts.session)
+
+    # Verify that the argument is an integer
+    try:
+        minutes = int(args[0])
+    except ValueError:
+        minutes = None
+
+    if minutes is not None:
+        if -1440 <= minutes <= 1440:
+            db = MythDB()
+            db.settings['NULL']['RebroadcastDelay'] = str(minutes)
+            if opts.debug:
+                print('Rebroadcast Delay set to ', minutes)
+        else:
+            print('Minutes value', minutes, 'out of range (-1440, 1440)')
+            sys.exit(2)
+
+
 def buildVersion():
     from lxml import etree
     version = etree.XML(u'<grabber></grabber>')
@@ -819,6 +846,8 @@ def main():
                       dest="language", help="Specify language for filtering.")
     parser.add_option('-a', "--area", metavar="COUNTRY", default=None,
                       dest="country", help="Specify country for custom data.")
+    parser.add_option('--rebroadcastdelay', action="store_true", default=False,
+                      dest="setrbd", help=("Set Rebroadcast Delay (minutes)."))
     parser.add_option('--debug', action="store_true", default=False,
                       dest="debug", help=("Disable caching and enable raw "
                                           "data output."))
@@ -903,6 +932,15 @@ def main():
                     sys.stdout.write('ERROR: tvmaze -C requires exactly one non-empty argument')
                     sys.exit(1)
                 buildCollection(args[0], opts)
+
+            if opts.setrbd:
+                # option --rebroadcastdelay <minutes>
+                if len(args) == 1:
+                    setrbd(args, opts)
+                else:
+                    sys.stdout.write('ERROR: tvmaze --rebroadcastdelay requires one non-empty argument.\n')
+                    sys.exit(1)
+
         except:
             if opts.debug:
                 raise
