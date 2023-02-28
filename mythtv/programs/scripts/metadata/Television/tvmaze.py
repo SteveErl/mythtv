@@ -150,6 +150,7 @@ def buildNumbers(args, opts):
     from MythTV.utility.dt import posixtzinfo
     from MythTV.tvmaze import tvmaze_api as tvmaze
     from MythTV import datetime
+    from MythTV import MythDB
     from lxml import etree
     from datetime import timedelta
 
@@ -214,7 +215,10 @@ def buildNumbers(args, opts):
     # check whether the 'subtitle' is really a timestamp
     try:
         dtInLocalZone = datetime.strptime(tvsubtitle, "%Y-%m-%d %H:%M:%S") # defaults to local timezone
+    except ValueError:
+        dtInLocalZone = None
 
+    if dtInLocalZone:
         # The user may optionally specify a 'Broadcast Delay'.
         #
         #   https://en.wikipedia.org/wiki/Broadcast_delay
@@ -227,8 +231,10 @@ def buildNumbers(args, opts):
         #   to air in local primetime hours to improve accessibility
         #   and viewership.
         #
-        # There are also some broadcasts which are shown without a
-        # Broadcast Delay, such as live sporting events. When we are
+        # The initial broadcast happens in the eastern region(s).
+        # Rebroadcasts with delays happen in regions further west.
+        # There are also some programs which are shown in all regions
+        # without any delay, such as live sporting events. When we are
         # looking for a match by timestamp, we may need to try both
         # with and without a rebroadcast delay. For example, for an
         # 8pm show in New York:
@@ -243,15 +249,25 @@ def buildNumbers(args, opts):
         #  Pacific/Honolulu    -10    240         15:00   19:00     7pm
         #
         # The Rebroadcast Delay (in minutes) may be specified
-        # with a 3rd argument.
-        if len(args) > 2:
-            rbDelayMinutes = int(args[2])
-        else:
+        # with a 3rd argument or in the MythTv database.
+        try:
+            if len(args) > 2:
+                rbDelayMinutes = int(args[2])
+            else:
+                db = MythDB()
+                rbd = db.settings['NULL']['RebroadcastDelay']
+                if rbd:
+                    rbDelayMinutes = int(rbd)
+                    if rbDelayMinutes == 0:
+                        rbDelayMinutes = None
+                else:
+                    rbDelayMinutes = None
+
+        except ValueError:
             rbDelayMinutes = None
 
-    except ValueError:
-        dtInLocalZone = None
-        rbDelayMinutes = None
+        if opts.debug:
+            print('Rebroadcast Delay =', rbDelayMinutes)
 
     matchesFound = 0
     best_ep_quality = 0.5   # require at least this quality on string match
