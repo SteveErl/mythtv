@@ -421,6 +421,17 @@ def buildNumbers(args, opts):
                         if opts.debug:
                             print('Adding rebroadcast episode \'%s\' to date match list' % ep)
                         date_match_list.append(i)
+                # If there is only one episode of this show on this day,
+                # consider it a date match.
+                elif len(episodes) == 1:
+                    if opts.debug:
+                        if epInTgtZone > dtInTgtZone:
+                            print('Adding episode \'%s\' to date match list. Offset = %s' \
+                                % (episodes[i], epInTgtZone - dtInTgtZone))
+                        else:
+                            print('Adding episode \'%s\' to date match list. Offset = %s' \
+                                % (episodes[i], dtInTgtZone - epInTgtZone))
+                    date_match_list.append(i)
 
             if not time_match_list:
                 # No exact matches found, so use the list of the closest episode(s)
