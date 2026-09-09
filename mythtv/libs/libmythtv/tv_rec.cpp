@@ -3784,7 +3784,7 @@ void TVRec::TuningFrequency(const TuningRequest &request)
     QString channum = request.m_channel;
 
     bool ok1 = true;
-    if (m_channel)
+    if (!dtvchan && m_channel)
     {
         m_channel->Open();
         if (!channum.isEmpty())
